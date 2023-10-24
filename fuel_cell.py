@@ -2487,8 +2487,9 @@ class SteadyStateEmprical:
         response_df["Vfc"] = Vstack
         return response_df
 
+
 class StateSpaceModel:
-    def __init__(self, initial_state_variables = None):
+    def __init__(self, initial_state_variables = None, input_df = None):
         # cell parameters for avista fuel cell
         self.cell_parameters = {"A_s": 3.2 * 10**(-2),
                                 "a": -3.08 * 10**(-3),
@@ -2529,30 +2530,19 @@ class StateSpaceModel:
                                 "Ql": None,
                                 "Vc" : None
                                 }
-        self.previous_state_variables = {
-                                "mO2_net" :None,
-                                "mH2_net" :  None,
-                                "mH2O_net" : None,
-                                "T": None,
-                                "PH2": None,
-                                "PO2": None,
-                                "PH2O": None,
-                                "Qc": None,
-                                "Qe": None,
-                                "Ql": None,
-                                "Vc" : None
-                                }
+        self.current_theta = None
         
-        self.input_variable = {
+        self.input_states = {   "I": None,
                                 "u_Pa": None,
                                 "u_Pc": None,
                                 "u_Tr": None
                                }
         
-        if not isinstance(initial_state_variables, type(None)):
-            self.previous_state_variables = copy.deepcopy(initial_state_variables)
+        if isinstance(input_df, type(None)):
+            self.input_df = pandas.DataFrame()
             
-            
+        else:
+            self.input_df = copy.deepcopy(input_df)
         
     @property
     def matrix_a_44(self):
@@ -2566,9 +2556,9 @@ class StateSpaceModel:
         a_44 = (-hs *ns * A_s)/(M_fc * Cfc)
         return a_44
     
-    def matrix_a_11(self, I):
+    def matrix_a_11(self):
         cell_parameters = copy.deepcopy(self.cell_parameters)
-
+        I = self.input_states["I"]
         C = cell_parameters["C"]
         Vact = self.activation_loss()
         Rconc = self.concentration_resistance()
@@ -2577,10 +2567,11 @@ class StateSpaceModel:
         a_11 = (-1)/ C*(Ract + Rconc)
         
         return a_11
-
-    def activation_loss(self, I):
+    
+    def activation_loss(self):
         
         cell_parameters = copy.deepcopy(self.cell_parameters)
+        I = self.input_states["I"]
         a = cell_parameters["a"]
         b = cell_parameters["b"]
         a0 = cell_parameters["a0"]
@@ -2590,7 +2581,8 @@ class StateSpaceModel:
         return Vact
     
     # Valid only for Avista labs SR-12
-    def concentration_resistance(self, I):
+    def concentration_resistance(self):
+        I = self.input_states["I"]
         Rconc0 = 0.080312
         Rconc1 = 5.2211*(10**(-8))*(I**6) - 3.4578*(10**(-6))*(I**5) + 8.6437*(10**(-5))*(I**4) - 0.010089**(I**3) + 0.005554*(I**2) - 0.010542*I
         T = self.state_variables["T"]
@@ -2599,8 +2591,10 @@ class StateSpaceModel:
         
         return Rconc
     
-    def ohmic_loss(self, T, I):
+    def ohmic_loss(self):
         
+        I = self.input_states["I"]
+        T = self.input_states["u_Tr"]
         cell_parameters = copy.deepcopy(self.cell_parameters)
         Roc = cell_parameters["Roc"]
         K_I = cell_parameters["K_I"]
@@ -2608,9 +2602,11 @@ class StateSpaceModel:
         Ro = Roc + K_I*I + K_T * T
         
         return Ro
-   
-    def calc_theta(self, current_state_variables, I):
+    
+    def calc_theta(self):
         
+        I = self.input_states["I"]
+        current_state_variables = self.current_state_variables
         cell_parameters = copy.deepcopy(self.cell_parameters)
         R = cell_parameters["R"]
         Va = cell_parameters["Va"]
@@ -2646,13 +2642,22 @@ class StateSpaceModel:
         E0_cell = cell_parameters["E0_cell"]
         
         theta_7 = ns*(E0_cell + (R*x4)/(2*F) * np.log(x5*(x6**0.5)/x7) - Vact - Vconc - Vo)
+        Mfc = cell_parameters["M_fc"]
+        Cfc = cell_parameters["Cfc"]
+        theta_8 = ns*((2*E0_cell/Mfc*Cfc) + R*x4/F*Mfc*Cfc)*np.log(x5*x6)
+        self.current_theta = {"theta_1": theta_1,
+                      "theta_2": theta_2,
+                      "theta_3": theta_3,
+                      "theta_4": theta_4,
+                      "theta_5": theta_5,
+                      "theta_6": theta_6,
+                      "theta_7": theta_7,
+                      "theta_8": theta_8}   
         
         
+    def matrix_a(self):
         
-        
-        
-    def matrix_a(self, I, state = "current"):
-        
+        I = self.input_states["I"]
         cell_parameters = copy.deepcopy(self.cell_parameters)
         hs = cell_parameters["hs"]
         ns = cell_parameters["ns"]
@@ -2661,9 +2666,11 @@ class StateSpaceModel:
         a_44 = self.matrix_a_44
         a_11 = self.matrix_a_11(I)
         cell_parameters = copy.deepcopy(self.cell_parameters)
-        theta_1 = self.calc_theta_1(state)
-        theta_5 =  self.calc_theta_5(state)
-        theta_3 = self.calc_theta_3(state)
+        theta = self.calc_theta()
+        
+        theta_1 = theta["theta_1"]
+        theta_5 =  theta["theta_2"]
+        theta_3 = theta["theta_3"]
         lamb_a = cell_parameters["lamb_a"]
         lamb_c = cell_parameters["lamb_c"]
       
@@ -2695,17 +2702,20 @@ class StateSpaceModel:
                     a_matrix[index_i][index_j] = hs * ns * As
                     
         return a_matrix
-    
-    def matrix_b(self, state = "current"):
+        
+        
+    def matrix_b(self):
+        
         b_matrix = np.zeros((11,3))
         cell_parameters = copy.deepcopy(self.cell_parameters)
+        
         b_12 = -1 * self.matrix_a_44
-        theta_1 = self.calc_theta_1(state)
-        theta_3 = self.calc_theta_3(state)
+        theta = self.calc_theta()
+        theta_1 = theta["theta_1"]
+        theta_3 = theta["theta_3"]
         hs = cell_parameters["hs"]
         ns = cell_parameters["ns"]
         As = cell_parameters["As"]
-        
         
         b_matrix[1][2] = b_12
         b_matrix[2][0] = 2*theta_1
@@ -2718,29 +2728,35 @@ class StateSpaceModel:
                     
         #         elif 
         return b_matrix
-    
-    
+        
     def matrix_g(self):
-        cell_paramaters = copy.deepcopy(self.cell_parameters)
+        cell_parameters = copy.deepcopy(self.cell_parameters)
+        g_matrix = np.zeros((1,11))
         lamb_c = cell_parameters["lamb_c"]
         lamb_a = cell_parameters["lamb_a"]
-        F = cell_paramaters["F"]
+        F = cell_parameters["F"]
+        C = cell_parameters["C"]
         
-    # def model(self, y):
+        current_theta = self.current_theta
+        theta_2 = current_theta["theta_2"]
+        theta_4 = current_theta["theta_4"]
+        theta_6 = current_theta["theta_6"]
+        theta_7 = current_theta["theta_7"]
+        theta_8 = current_theta["theta_8"]
         
-                
-                    
-                    
-                        
-                    
-       
+        g_matrix[0][0] = 1/(4*lamb_c*F)
+        g_matrix[0][1] = 1/(2*lamb_a*F)
+        g_matrix[0][2] = 1/(2*lamb_c*F)
+        g_matrix[0][3] = -theta_8
+        g_matrix[0][4] = -theta_2
+        g_matrix[0][5] = -theta_4
+        g_matrix[0][6] = 2*theta_4
+        g_matrix[0][7] = theta_6
+        g_matrix[0][8] = theta_7
+        g_matrix[0][10] = 1/C
         
-        
-        
-        
-    # def set_current_state(self):
-        
-            
+        return g_matrix
+    
         
     def reset_states(self):
         self.previous_state_variables = copy.deepcopy(self.current_state_variables)
@@ -2758,18 +2774,6 @@ class StateSpaceModel:
                                 "Vc" : None
                                 }
         
-        
-        
-        
-        
-        
-        
-        
-        
-        
-
-
-
 
              
 #%% Data Class  

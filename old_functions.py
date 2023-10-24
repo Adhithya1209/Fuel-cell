@@ -716,5 +716,250 @@ def create_signal():
          def calc_theta_6(self, state = "current"):
              current_state_variables = copy.deepcopy(self.current_state_varibles)
          
+            
+class StateSpaceModel_old:
+    def __init__(self, initial_state_variables = None):
+        # cell parameters for avista fuel cell
+        self.cell_parameters = {"A_s": 3.2 * 10**(-2),
+                                "a": -3.08 * 10**(-3),
+                                "a0": 1.3697,
+                                "b": 9.724 * 10*(-5),
+                                "Cfc":500,
+                                "C": 10,
+                                "E0_cell": 1.23,
+                                "e": 2,
+                                "F": 96487,
+                                "del_G": 237.2 * 10**(3),
+                                "hs": 37.5,
+                                "K_I": 1.87*10**(-3),
+                                "K_T": -2.37 * 10**(-3),
+                                "M_fc": 44,
+                                "m_H2O": 8.614 * 10**(-5),
+                                "ns": 48,
+                                "PH2O": 2,
+                                "R": 8.31,
+                                "R0_c": 0.28,
+                                "Va": 10**(-3),
+                                "Vc": 10**(-3),
+                                "lamb_a": 60,
+                                "lamb_c": 60,
+                                "PH2O_e": 1
+                                }
+        
+        self.current_state_variables = {
+                                "mO2_net" :None,
+                                "mH2_net" :  None,
+                                "mH2O_net" : None,
+                                "T": None,
+                                "PH2": None,
+                                "PO2": None,
+                                "PH2O": None,
+                                "Qc": None,
+                                "Qe": None,
+                                "Ql": None,
+                                "Vc" : None
+                                }
+        self.current_theta = None
+        
+        
+        self.input_states = {   "I": None,
+                                "u_Pa": None,
+                                "u_Pc": None,
+                                "u_Tr": None
+                               }
+        
+        if not isinstance(initial_state_variables, type(None)):
+            self.previous_state_variables = copy.deepcopy(initial_state_variables)
+            
+            
+        
+    @property
+    def matrix_a_44(self):
+        cell_parameters = copy.deepcopy(self.cell_parameters)
+        hs = cell_parameters["hs"]
+        ns = cell_parameters["ns"]
+        A_s = cell_parameters["A_s"]
+        M_fc = cell_parameters["M_fc"]
+        Cfc = cell_parameters["Cfc"]
+        
+        a_44 = (-hs *ns * A_s)/(M_fc * Cfc)
+        return a_44
+    
+    def matrix_a_11(self, I):
+        cell_parameters = copy.deepcopy(self.cell_parameters)
+
+        C = cell_parameters["C"]
+        Vact = self.activation_loss()
+        Rconc = self.concentration_resistance()
+        Ract = Vact/I
+        
+        a_11 = (-1)/ C*(Ract + Rconc)
+        
+        return a_11
+
+    def activation_loss(self, I):
+        
+        cell_parameters = copy.deepcopy(self.cell_parameters)
+        a = cell_parameters["a"]
+        b = cell_parameters["b"]
+        a0 = cell_parameters["a0"]
+        T = self.state_variables["T"]
+        Vact = a0 + T * (a + (b*np.log(I)))
+        
+        return Vact
+    
+    # Valid only for Avista labs SR-12
+    def concentration_resistance(self, I):
+        Rconc0 = 0.080312
+        Rconc1 = 5.2211*(10**(-8))*(I**6) - 3.4578*(10**(-6))*(I**5) + 8.6437*(10**(-5))*(I**4) - 0.010089**(I**3) + 0.005554*(I**2) - 0.010542*I
+        T = self.state_variables["T"]
+        Rconc2 = 0.0002747*(T-298)
+        Rconc = Rconc0 + Rconc1 + Rconc2
+        
+        return Rconc
+    
+    def ohmic_loss(self, T, I):
+        
+        cell_parameters = copy.deepcopy(self.cell_parameters)
+        Roc = cell_parameters["Roc"]
+        K_I = cell_parameters["K_I"]
+        K_T = cell_parameters["K_T"]
+        Ro = Roc + K_I*I + K_T * T
+        
+        return Ro
+   
+    def calc_theta(self, I):
+        
+        current_state_variables = self.current_state_variables
+        cell_parameters = copy.deepcopy(self.cell_parameters)
+        R = cell_parameters["R"]
+        Va = cell_parameters["Va"]
+        mH2Oa_in = cell_parameters["mH2O"]
+        PH2Oa_in = cell_parameters["PH2O_e"]
+        F = cell_parameters["F"]
+        ns = cell_parameters["ns"]
+        del_G0 = cell_parameters["del_G"]
+        PH2O_in = cell_parameters["PH2O"]
+        x4 = current_state_variables["T"]
+        x5 = current_state_variables["PH2"]
+        x6 = current_state_variables["PO2"]
+        x7 = current_state_variables["PH2O"]
+        
+        theta_1 = (R*mH2Oa_in*x4)/(Va*PH2Oa_in)
+        theta_2 = R*mH2Oa_in*x4
+        
+        Vc = cell_parameters["Vc"]
+        mH2Oc_in = cell_parameters["mH2O"]
+        PH2Oc_in = cell_parameters["PH2O_e"]
+        theta_3 = (R*mH2Oc_in*x4)/(Vc*PH2Oc_in)
+        theta_4 = (R*x4)/(4*Vc*F)
+        
+        x7 = current_state_variables["PH2O"]
+        theta_5 = (R* mH2Oc_in *(PH2O_in - x7))/Vc*(PH2Oc_in)
+        theta_6 = (ns*del_G0)/(2*F) - (ns*R*x4/2*F)*np.log(x5*(x6**0.5)/x7)
+        
+        Rconc = self.concentration_loss(x4, I)
+        Ro = self.ohmic_loss(x4, I)
+        Vo = Ro * I
+        Vconc = Rconc*I
+        Vact = self.activation_loss(I)
+        E0_cell = cell_parameters["E0_cell"]
+        
+        theta_7 = ns*(E0_cell + (R*x4)/(2*F) * np.log(x5*(x6**0.5)/x7) - Vact - Vconc - Vo)
+        Mfc = cell_parameters["M_fc"]
+        Cfc = cell_parameters["Cfc"]
+        theta_8 = ns*((2*E0_cell/Mfc*Cfc) + R*x4/F*Mfc*Cfc)*np.log(x5*x6)
+        self.current_theta = {"theta_1": theta_1,
+                      "theta_2": theta_2,
+                      "theta_3": theta_3,
+                      "theta_4": theta_4,
+                      "theta_5": theta_5,
+                      "theta_6": theta_6,
+                      "theta_7": theta_7,
+                      "theta_8": theta_8}   
+        
+        
+        
+        
+    def matrix_a(self, I, state = "current"):
+        
+        cell_parameters = copy.deepcopy(self.cell_parameters)
+        hs = cell_parameters["hs"]
+        ns = cell_parameters["ns"]
+        As = cell_parameters["As"]
+        a_matrix = np.zeros((11,11))
+        a_44 = self.matrix_a_44
+        a_11 = self.matrix_a_11(I)
+        cell_parameters = copy.deepcopy(self.cell_parameters)
+        theta_1 = self.calc_theta_1(state)
+        theta_5 =  self.calc_theta_5(state)
+        theta_3 = self.calc_theta_3(state)
+        lamb_a = cell_parameters["lamb_a"]
+        lamb_c = cell_parameters["lamb_c"]
+      
+        for index_i, row in a_matrix:
+            for index_j, element in row:
+                if index_i == index_j:
+                    if index_j == 0 or index_j == 2:
+                        a_matrix[index_i][index_j] = (-1/lamb_c)
+                        
+                    elif index_i == 1:
+                        a_matrix[index_i][index_j] = (-1/lamb_a)
+                        
+                    elif index_i == 3:
+                        a_matrix[index_i][index_j] = a_44
+                        
+                    elif index_i == 4:
+                        a_matrix[index_i][index_j] = (-2) * theta_1
+                        
+                    elif index_i == 5:
+                        a_matrix[index_i][index_j] = (-2) * theta_3
+                        
+                    elif index_i ==10:
+                        a_matrix[index_i][index_j] = a_11
+                        
+                elif index_i == 6 and index_j ==3:
+                    a_matrix[index_i][index_j] = (-2) * theta_5
+                    
+                elif index_i == 9 and index_j == 3:
+                    a_matrix[index_i][index_j] = hs * ns * As
+                    
+        return a_matrix
+    
+    def matrix_b(self, state = "current"):
+        b_matrix = np.zeros((11,3))
+        cell_parameters = copy.deepcopy(self.cell_parameters)
+        I = self.current_input_state["I"]
+        
+        b_12 = -1 * self.matrix_a_44
+        current_theta = self.calc_theta(current_state_variables, I)
+        theta_1 = self.calc_theta_1(state)
+        theta_3 = self.calc_theta_3(state)
+        hs = cell_parameters["hs"]
+        ns = cell_parameters["ns"]
+        As = cell_parameters["As"]
+        
+        
+        b_matrix[1][2] = b_12
+        b_matrix[2][0] = 2*theta_1
+        b_matrix[3][1] = 2*theta_3
+        b_matrix[9][2] = -1*(hs * ns * As)
+        # for index_i, row in b_matrix:
+        #     for index_j, element in row:
+        #         if index_i == 1 and index_j ==2:
+        #             b_matrix[index_i][index_j] = b_12
+                    
+        #         elif 
+        return b_matrix
+    
+    
+    def matrix_g(self):
+        cell_paramaters = copy.deepcopy(self.cell_parameters)
+        lamb_c = cell_parameters["lamb_c"]
+        lamb_a = cell_parameters["lamb_a"]
+        F = cell_paramaters["F"]
+        
+    # def model(self, y):
+
         
 
