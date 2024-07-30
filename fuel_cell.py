@@ -20,9 +20,11 @@ from scipy import signal
 from datetime import datetime, timedelta
 import warnings
 from sklearn.model_selection import train_test_split
+from scipy.integrate import odeint
+from scipy.integrate import solve_ivp
 
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import StandardScaler
-
 """
 1. PEM fuel cell models - ElectroChemicalDynamic (OPEM)
                             CorreaModel
@@ -295,6 +297,56 @@ def dum_input():
     df = pandas.DataFrame(data)
            
     return df
+
+def dum_input_current():
+    df = pandas.DataFrame(columns = ["I", "t"])
+    time = []
+    t1 = np.linspace(99.5, 100.2, 100)
+    t2= 100*[100.2]
+    t3 = np.linspace(100.2, 100.4, 100)
+    t4= 100*[100.4]
+    t5 = np.linspace(100.4, 100.6, 100)
+    t6 = 100*[100.6]
+    t7 = np.linspace(100.6, 100.7, 100)
+    t8 = 100*[100.7]
+    t9 = np.linspace(100.7, 102, 100)
+
+    time =np.append(time, t1)
+
+    time =np.append(time, t2)
+    time =np.append(time, t3)
+    time =np.append(time, t4)
+    time =np.append(time, t5)
+    time =np.append(time, t6)
+    time =np.append(time, t7)
+    time =np.append(time, t8)
+    time =np.append(time, t9)
+
+    current = []
+    c1= 100*[12.5]
+    c2 = np.linspace(12.5, 20.5, 100)
+    c3 = 100*[20.5]
+    c4 = np.linspace(20.5, 24.5, 100)
+    c5 = 100*[24.5]
+    c6 = np.linspace(24.5, 20.5, 100)
+    c7 = 100*[20.5]
+    c8 = np.linspace(20.5, 13, 100)
+    c9 = 100*[13]
+    current = np.append(current, c1)
+    current =np.append(current, c2)
+    current =np.append(current, c3)
+    current =np.append(current, c4)
+    current =np.append(current, c5)
+    current =np.append(current, c6)
+    current =np.append(current, c7)
+    current =np.append(current, c8)
+    current =np.append(current, c9)
+    
+    df["I"] = current
+    df["t"] = time
+    
+    return df
+    
 
 #%% Utility class
 
@@ -850,7 +902,7 @@ class CorreaModel:
             
 class GenericMatlabModel:     
     
-    def __init__(self, nominal_parameters = None, input_df = None):
+    def __init__(self, nominal_parameters = None, input_df = None, model_type = "detail"):
         if isinstance(nominal_parameters, type(None)):
             
             # EPAC 500
@@ -919,6 +971,7 @@ class GenericMatlabModel:
         self.UfO2_vector = []            
         self.PH2O_vector = []
         
+        
      #### Nominal/ Calculated Values 
         # Nominal hydrogen flow rate
     def hydro_utilisation(self, nom = True):
@@ -958,10 +1011,9 @@ class GenericMatlabModel:
             x = self.current_state["x"]
             
             Ufh2 = (60000*R * T * I_fc*N)/(z * P_fuel *Vfuel * x *F)
-            self.UfH2_vector.append(Ufh2)
+        self.current_state["UfH2"] = Ufh2
         
-        return Ufh2
-    
+        
     # Nominal oxygen flow rate
     def oxygen_utilisation(self, nom = True):
         """
@@ -1003,12 +1055,12 @@ class GenericMatlabModel:
             y = self.current_state["y"]
             
             Ufo2 = (60000* R * T * I_fc*N)/(2 * z * P_air *Vair * y* F)
-            self.current_state["UfO2"] = Ufo2
-            self.UfO2_vector.append(Ufo2)
+        self.current_state["UfO2"] = Ufo2
             
-        return Ufo2
+            
+        
     
-    def calc_pressure(self, nom = True):
+    def calc_pressure(self, nom = True, util=True):
         """
         
 
@@ -1029,25 +1081,37 @@ class GenericMatlabModel:
             
             x = self.nominal_parameters["xn"]
             y = self.nominal_parameters["yn"]
-            Ufh2 = self.hydro_utilisation()
-            Ufo2 = self.oxygen_utilisation()
+            if util:
+                self.hydro_utilisation()
+                self.oxygen_utilisation()
+                self.adaptive_control_input()
+            
             P_air = self.nominal_parameters["P_airn"]* 1.01325 * (10 ** (5))
             P_fuel = self.nominal_parameters["P_fueln"]* 1.01325 * (10 ** (5))
             
         else:
             x = self.current_state["x"]
             y = self.current_state["y"]
-            Ufh2 = self.hydro_utilisation(nom = False)
-            Ufo2 = self.oxygen_utilisation(nom = False)
+            if util:
+                self.hydro_utilisation(nom = False)
+                self.oxygen_utilisation(nom = False)
+                self.adaptive_control_input()
+            
             P_air = self.current_state["P_air"]* 1.01325 * (10 ** (5))
             P_fuel = self.current_state["P_fuel"]* 1.01325 * (10 ** (5))
-            
+        
+        Ufh2 = self.current_state["UfH2"]
+        Ufo2 = self.current_state["UfO2"]
+        self.UfO2_vector.append(Ufo2)
+        self.UfH2_vector.append(Ufh2)
+        
         PH2 = x * (1 - Ufh2)*P_fuel
         self.PH2_vector.append(PH2)
         
         PO2 = y * (1 - Ufo2)*P_air
         self.PO2_vector.append(PO2)
-            
+        self.current_state["PH2"] = PH2   
+        self.current_state["PO2"] = PO2   
         return PH2, PO2
     
     def calc_pressure_h2o(self, nom = True):
@@ -1069,12 +1133,12 @@ class GenericMatlabModel:
         if nom:
             
             y = self.nominal_parameters["yn"]
-            Ufo2 = self.oxygen_utilisation()
+            Ufo2 = self.current_state["UfO2"]
             P_air = self.nominal_parameters["P_airn"]* 1.01325 * (10 ** (5))
             
         else:
             y = self.current_state["y"]
-            Ufo2 = self.oxygen_utilisation()
+            Ufo2 = self.current_state["UfO2"]
             P_air = self.current_state["P_air"]* 1.01325 * (10 ** (5))
             
         PH2O = (w + 2* y * Ufo2) * P_air
@@ -1094,7 +1158,7 @@ class GenericMatlabModel:
 
         """
         Vu = self.nominal_parameters["Vu"]
-        ufo2n = self.oxygen_utilisation()
+        ufo2n = self.current_state["UfO2"]
         
         try:
             ufo2_peak_percent = self.nominal_parameters["ufo2_peak_percent"]
@@ -1154,16 +1218,13 @@ class GenericMatlabModel:
             T = self.nominal_parameters["Tn"]
             
             PH2, PO2 = self.calc_pressure(nom = False)
-            self.PH2_vector.pop()
-            self.PO2_vector.pop()
-            self.UfH2_vector.pop()
-            self.UfO2_vector.pop()
+            
             PH2O = self.calc_pressure_h2o(nom = False)
         
         
-        PH2 = PH2/(1.01325 * (10 ** (5)))
-        PO2 = PO2/(1.01325 * (10 ** (5)))
-        PH2O = PH2O/(1.01325 * (10 ** (5)))
+        # PH2 = PH2/(1.01325 * (10 ** (5)))
+        # PO2 = PO2/(1.01325 * (10 ** (5)))
+        # PH2O = PH2O/(1.01325 * (10 ** (5)))
         
         if T>373:
             
@@ -1233,6 +1294,7 @@ class GenericMatlabModel:
         F = self.constants["faradays"]
         k = self.constants["boltzmann"]
         PH2n, PO2n = self.calc_pressure()
+       
         h = self.constants["plancks"]
         R = self.constants["gas_constant"]
         Tn = self.nominal_parameters["Tn"]
@@ -1291,7 +1353,7 @@ class GenericMatlabModel:
         self.fuel_cell_parameters = fuel_cell_parameters
         
         self.reset_calc_vectors()
-        
+      
         return fuel_cell_parameters
      
     #### Dynamic parameter calculation   
@@ -1312,8 +1374,8 @@ class GenericMatlabModel:
         h = self.constants["plancks"]
         delta_G = self.fuel_cell_parameters["activation_energy"]
         T = self.current_state["T"]
-        PH2, PO2 = self.calc_pressure(nom= False)
-
+        PH2 = self.current_state["PH2"]
+        PO2 = self.current_state["PO2"]
         i0 = (z* F * k *(PH2 + PO2))/(R*h) * np.exp(-delta_G/ (R*T))
         
         return i0
@@ -1793,6 +1855,14 @@ class GenericMatlabModel:
         self.UfH2_vector = []
         self.UfO2_vector = []
         self.PH2O_vector = []
+        
+    def adaptive_control_input(self):
+        
+        if self.current_state["UfH2"] >1:
+            self.current_state["UfH2"] = 0.5
+            
+        if self.current_state["UfO2"] >1:
+            self.current_state["UfO2"] = 0.5
 
 class EquivalentCircuitRL:
     
@@ -2489,7 +2559,23 @@ class SteadyStateEmprical:
 
 
 class StateSpaceModel:
-    def __init__(self, initial_state_variables = None, input_df = None):
+    
+    def __init__(self, input_df = None, current_profile = None):
+        """
+        
+
+        Parameters
+        ----------
+        input_df : TYPE, optional
+            DESCRIPTION. The default is None.
+        current_profile : TYPE, optional
+            DESCRIPTION. The default is None.
+
+        Returns
+        -------
+        None.
+
+        """
         # cell parameters for avista fuel cell
         self.cell_parameters = {"A_s": 3.2 * 10**(-2),
                                 "a": -3.08 * 10**(-3),
@@ -2505,11 +2591,11 @@ class StateSpaceModel:
                                 "K_I": 1.87*10**(-3),
                                 "K_T": -2.37 * 10**(-3),
                                 "M_fc": 44,
-                                "m_H2O": 8.614 * 10**(-5),
+                                "mH2O": 8.614 * 10**(-5),
                                 "ns": 48,
                                 "PH2O": 2,
                                 "R": 8.31,
-                                "R0_c": 0.28,
+                                "Roc": 0.28,
                                 "Va": 10**(-3),
                                 "Vc": 10**(-3),
                                 "lamb_a": 60,
@@ -2543,9 +2629,28 @@ class StateSpaceModel:
             
         else:
             self.input_df = copy.deepcopy(input_df)
+            
+            
+        self.output_df = pandas.DataFrame()
         
+        if isinstance(current_profile, type(None)):
+            self.input_signal = dum_input_current()
+            
+        self.counter = 0
+        self.x = None
+
+    #### Matrix elements calculation
     @property
     def matrix_a_44(self):
+        """
+        
+
+        Returns
+        -------
+        a_44 : TYPE
+            DESCRIPTION.
+
+        """
         cell_parameters = copy.deepcopy(self.cell_parameters)
         hs = cell_parameters["hs"]
         ns = cell_parameters["ns"]
@@ -2557,42 +2662,81 @@ class StateSpaceModel:
         return a_44
     
     def matrix_a_11(self):
+        """
+        
+
+        Returns
+        -------
+        a_11 : TYPE
+            DESCRIPTION.
+
+        """
         cell_parameters = copy.deepcopy(self.cell_parameters)
         I = self.input_states["I"]
+        
         C = cell_parameters["C"]
         Vact = self.activation_loss()
         Rconc = self.concentration_resistance()
+        
         Ract = Vact/I
         
-        a_11 = (-1)/ C*(Ract + Rconc)
+        a_11 = (-1)/ (C*(Ract + Rconc))
+        
         
         return a_11
     
+    #### Polarisation loss 
     def activation_loss(self):
+        """
+        
+
+        Returns
+        -------
+        Vact : TYPE
+            DESCRIPTION.
+
+        """
         
         cell_parameters = copy.deepcopy(self.cell_parameters)
         I = self.input_states["I"]
         a = cell_parameters["a"]
         b = cell_parameters["b"]
         a0 = cell_parameters["a0"]
-        T = self.state_variables["T"]
+        T = self.input_states["u_Tr"]
         Vact = a0 + T * (a + (b*np.log(I)))
         
         return Vact
     
     # Valid only for Avista labs SR-12
     def concentration_resistance(self):
+        """
+        
+
+        Returns
+        -------
+        Rconc : TYPE
+            DESCRIPTION.
+
+        """
         I = self.input_states["I"]
         Rconc0 = 0.080312
         Rconc1 = 5.2211*(10**(-8))*(I**6) - 3.4578*(10**(-6))*(I**5) + 8.6437*(10**(-5))*(I**4) - 0.010089**(I**3) + 0.005554*(I**2) - 0.010542*I
-        T = self.state_variables["T"]
+        T = self.input_states["u_Tr"]
         Rconc2 = 0.0002747*(T-298)
         Rconc = Rconc0 + Rconc1 + Rconc2
         
         return Rconc
     
     def ohmic_loss(self):
+        """
         
+
+        Returns
+        -------
+        Ro : TYPE
+            DESCRIPTION.
+
+        """
         I = self.input_states["I"]
         T = self.input_states["u_Tr"]
         cell_parameters = copy.deepcopy(self.cell_parameters)
@@ -2602,11 +2746,18 @@ class StateSpaceModel:
         Ro = Roc + K_I*I + K_T * T
         
         return Ro
-    
+    #### Matrix calculation
     def calc_theta(self):
+        """
         
+
+        Returns
+        -------
+        None.
+
+        """
         I = self.input_states["I"]
-        current_state_variables = self.current_state_variables
+        current_state_variables = copy.deepcopy(self.current_state_variables)
         cell_parameters = copy.deepcopy(self.cell_parameters)
         R = cell_parameters["R"]
         Va = cell_parameters["Va"]
@@ -2622,7 +2773,7 @@ class StateSpaceModel:
         x7 = current_state_variables["PH2O"]
         
         theta_1 = (R*mH2Oa_in*x4)/(Va*PH2Oa_in)
-        theta_2 = R*mH2Oa_in*x4
+        theta_2 = (R*x4)/(2*Va*F)
         
         Vc = cell_parameters["Vc"]
         mH2Oc_in = cell_parameters["mH2O"]
@@ -2631,20 +2782,20 @@ class StateSpaceModel:
         theta_4 = (R*x4)/(4*Vc*F)
         
         x7 = current_state_variables["PH2O"]
-        theta_5 = (R* mH2Oc_in *(PH2O_in - x7))/Vc*(PH2Oc_in)
-        theta_6 = (ns*del_G0)/(2*F) - (ns*R*x4/2*F)*np.log(x5*(x6**0.5)/x7)
+        theta_5 = (R* mH2Oc_in *(PH2O_in - x7))/(Vc*(PH2Oc_in))
+        theta_6 = (ns*del_G0)/(2*F) - ((ns*R*x4)/(2*F))*np.log((x5*(x6**0.5))/x7)
         
-        Rconc = self.concentration_loss(x4, I)
-        Ro = self.ohmic_loss(x4, I)
+        Rconc = self.concentration_resistance()
+        Ro = self.ohmic_loss()
         Vo = Ro * I
         Vconc = Rconc*I
-        Vact = self.activation_loss(I)
+        Vact = self.activation_loss()
         E0_cell = cell_parameters["E0_cell"]
         
         theta_7 = ns*(E0_cell + (R*x4)/(2*F) * np.log(x5*(x6**0.5)/x7) - Vact - Vconc - Vo)
         Mfc = cell_parameters["M_fc"]
         Cfc = cell_parameters["Cfc"]
-        theta_8 = ns*((2*E0_cell/Mfc*Cfc) + R*x4/F*Mfc*Cfc)*np.log(x5*x6)
+        theta_8 = ns*((2*E0_cell/Mfc*Cfc) + (R*x4/F*Mfc*Cfc)*np.log(x5*(x6**0.5)/x7) - Vact - Vconc - Vo)
         self.current_theta = {"theta_1": theta_1,
                       "theta_2": theta_2,
                       "theta_3": theta_3,
@@ -2656,17 +2807,26 @@ class StateSpaceModel:
         
         
     def matrix_a(self):
+        """
         
+
+        Returns
+        -------
+        a_matrix : TYPE
+            DESCRIPTION.
+
+        """
         I = self.input_states["I"]
         cell_parameters = copy.deepcopy(self.cell_parameters)
         hs = cell_parameters["hs"]
         ns = cell_parameters["ns"]
-        As = cell_parameters["As"]
+        As = cell_parameters["A_s"]
         a_matrix = np.zeros((11,11))
         a_44 = self.matrix_a_44
-        a_11 = self.matrix_a_11(I)
+        a_11 = self.matrix_a_11()
         cell_parameters = copy.deepcopy(self.cell_parameters)
-        theta = self.calc_theta()
+        self.calc_theta()
+        theta = copy.deepcopy(self.current_theta)
         
         theta_1 = theta["theta_1"]
         theta_5 =  theta["theta_2"]
@@ -2674,8 +2834,8 @@ class StateSpaceModel:
         lamb_a = cell_parameters["lamb_a"]
         lamb_c = cell_parameters["lamb_c"]
       
-        for index_i, row in a_matrix:
-            for index_j, element in row:
+        for index_i, row in enumerate(a_matrix):
+            for index_j, element in enumerate(row):
                 if index_i == index_j:
                     if index_j == 0 or index_j == 2:
                         a_matrix[index_i][index_j] = (-1/lamb_c)
@@ -2705,17 +2865,27 @@ class StateSpaceModel:
         
         
     def matrix_b(self):
+        """
+        
+
+        Returns
+        -------
+        b_matrix : TYPE
+            DESCRIPTION.
+
+        """
         
         b_matrix = np.zeros((11,3))
         cell_parameters = copy.deepcopy(self.cell_parameters)
         
         b_12 = -1 * self.matrix_a_44
-        theta = self.calc_theta()
+        self.calc_theta()
+        theta = copy.deepcopy(self.current_theta)
         theta_1 = theta["theta_1"]
         theta_3 = theta["theta_3"]
         hs = cell_parameters["hs"]
         ns = cell_parameters["ns"]
-        As = cell_parameters["As"]
+        As = cell_parameters["A_s"]
         
         b_matrix[1][2] = b_12
         b_matrix[2][0] = 2*theta_1
@@ -2730,36 +2900,284 @@ class StateSpaceModel:
         return b_matrix
         
     def matrix_g(self):
+        """
+        
+
+        Returns
+        -------
+        g_matrix : TYPE
+            DESCRIPTION.
+
+        """
         cell_parameters = copy.deepcopy(self.cell_parameters)
-        g_matrix = np.zeros((1,11))
+        g_matrix = np.zeros(11)
         lamb_c = cell_parameters["lamb_c"]
         lamb_a = cell_parameters["lamb_a"]
         F = cell_parameters["F"]
         C = cell_parameters["C"]
         
-        current_theta = self.current_theta
+        current_theta = copy.deepcopy(self.current_theta)
         theta_2 = current_theta["theta_2"]
         theta_4 = current_theta["theta_4"]
         theta_6 = current_theta["theta_6"]
         theta_7 = current_theta["theta_7"]
         theta_8 = current_theta["theta_8"]
         
-        g_matrix[0][0] = 1/(4*lamb_c*F)
-        g_matrix[0][1] = 1/(2*lamb_a*F)
-        g_matrix[0][2] = 1/(2*lamb_c*F)
-        g_matrix[0][3] = -theta_8
-        g_matrix[0][4] = -theta_2
-        g_matrix[0][5] = -theta_4
-        g_matrix[0][6] = 2*theta_4
-        g_matrix[0][7] = theta_6
-        g_matrix[0][8] = theta_7
-        g_matrix[0][10] = 1/C
+        g_matrix[0] = 1/(4*lamb_c*F)
+        g_matrix[1] = 1/(2*lamb_a*F)
+        g_matrix[2] = 1/(2*lamb_c*F)
+        g_matrix[3] = -theta_8
+        g_matrix[4] = -theta_2
+        g_matrix[5] = -theta_4
+        g_matrix[6] = 2*theta_4
+        g_matrix[7] = theta_6
+        g_matrix[8] = theta_7
+        g_matrix[10] = 1/C
         
-        return g_matrix
+        g_matrix_T = np.transpose(g_matrix)
+        return g_matrix_T
+    
+    
+    def model(self, t, x):
+        """
+        
+
+        Parameters
+        ----------
+        x : TYPE
+            DESCRIPTION.
+        u : TYPE
+            DESCRIPTION.
+
+        Returns
+        -------
+        dx_dt : TYPE
+            DESCRIPTION.
+
+        """
+        u = np.array(self.control_input_function(t))
+        self.x = copy.deepcopy(x)
+        
+        
+        self.current_state_variables = {
+                                "mO2_net" :x[0],
+                                "mH2_net" :  x[1],
+                                "mH2O_net" : x[2],
+                                "T": x[3],
+                                "PH2": x[4],
+                                "PO2": x[5],
+                                "PH2O": x[6],
+                                "Qc": x[7],
+                                "Qe": x[8],
+                                "Ql": x[9],
+                                "Vc" : x[10]
+                                }
+        a_matrix = self.matrix_a()
+        
+        b_matrix = self.matrix_b()
+        g_matrix_T = self.matrix_g()
+        
+        dx_dt = a_matrix@x + (b_matrix @ u).flatten() + g_matrix_T
+        
+        
+        return dx_dt
+    
+    def control_input_function(self,t):
+        """
+        
+
+        Parameters
+        ----------
+        t : TYPE
+            DESCRIPTION.
+
+        Returns
+        -------
+        list
+            DESCRIPTION.
+
+        """
+        input_df = copy.deepcopy(self.input_df)
+        
+        u_Pa = input_df.loc[self.counter, "u_Pa"]
+        u_Pc = input_df.loc[self.counter, "u_Pc"]
+        u_Tr = input_df.loc[self.counter, "u_Tr"]
+        I = input_df.loc[self.counter, "I"]
+        #self.counter = self.counter+1
+        self.input_states["I"] = I
+        
+        self.input_states["u_Tr"] = u_Tr
+        self.input_states["u_Pa"] = u_Pa
+        self.input_states["u_Pc"] = u_Pc
+        
+        return [u_Pa, u_Pc, u_Tr]
+    
+    
+    #### Solver and Simulation
+    def ode_solver(self, initial_state_vector = None, solver = "LSODA"):
+        """
+        
+
+        Parameters
+        ----------
+        initial_state_vector : TYPE, optional
+            DESCRIPTION. The default is None.
+        input_df : TYPE, optional
+            DESCRIPTION. The default is None.
+        solver : TYPE, optional
+            DESCRIPTION. The default is "odeint".
+
+        Raises
+        ------
+        ValueError
+            DESCRIPTION.
+
+        Returns
+        -------
+        None.
+
+        """
+        if self.input_df.empty:
+            warnings.warn("Input_df is not provided. Generating Default "\
+                          "profile based input_signal. Use {} to generate "\
+                              "input signal".format(self.generate_input_signal.__name__))
+            self.generate_input_signal()
+        
+        if isinstance(initial_state_vector, type(None)):
+            x0 = {
+                    "mO2_net" :8.614 * 10**(-5),
+                    "mH2_net" :  8.614 * 10**(-5),
+                    "mH2O_net" : 8.614 * 10**(-5),
+                    "T": 308,
+                    "PH2": 5,
+                    "PO2": 5,
+                    "PH2O": 5,
+                    "Qc": 1.5,
+                    "Qe": 1.2,
+                    "Ql": 1,
+                    "Vc" : 0
+                    }
+        
+        
+        x0_list = list(x0.values())
+        
+        #x0_list_T = np.transpose(x0_list)
+        t = np.array(self.input_df["t"])
+        t_span = (t[0], t[-1])
+        if solver=="LSODA":
+            x = solve_ivp(self.model, t_span, x0_list, method='LSODA')
+            
+        elif solver=="odeint":
+            x = odeint(self.model, x0_list, t)
+            
+        #y = self.current_theta["theta_7"]
+        return x
+            
+        
+        
+        # if not isinstance(input_df, type(None)):
+        #     if not isinstance(self.input_df, type(None)):
+        #         warnings.warn('Overwriting input_df that was defined during object initialisation')
+        #         self.input_df = copy.deepcopy(input_df)
+                
+        #     else:
+        #         self.input_df = copy.deepcopy(input_df)
+                
+        # if isinstance(self.input_df, type(None)):
+        #     raise ValueError('Input operating condition for simulation')
+            
+            
+        # if isinstance(initial_state_df, type(None)) or len(input_df) != len(initial_state_df):
+        #     warnings.warn(' Poorly initialised state vectors. Reverting to'\
+        #                   ' default initial state vector profile. Check results carefully')
+                
+            
+        
+        # for (index, row1), (index2, row2) in zip(input_df.iterrows(), initial_state_df):
+        #     input_vector = self.add_current_profile(row1)
+        #     self.input_states = copy.deepcopy(input_vector)
+        #     t = input_vector["t"]
+            
+        #     if solver == "odeint" :
+                
+        #         x = odeint(self.model, x0, t)
+                
+    
+    #### Input signal generation
+    def generate_input_signal(self, I = None, profile = "Default", **kwargs):
+        """
+        I = [start, stop]
+        **kwargs = u_pa, u_pc, u_tr
+        profile = "Default", "step", "linear"
+
+        Parameters
+        ----------
+        I : TYPE, optional
+            DESCRIPTION. The default is None.
+        profile : TYPE, optional
+            DESCRIPTION. The default is "Default".
+        **kwargs : TYPE
+            DESCRIPTION.
+
+        Returns
+        -------
+        None.
+
+        """
+        if profile == "Default":
+            if not isinstance(I, type(None)):
+                raise ValueError("Custom value of I is not allowed in Default "\
+                                 "profile. Choose another profile to vary I")
+            input_df = copy.deepcopy(self.input_signal)
+            l = len(input_df)
+            try:
+                if len(kwargs["u_Pa"]) ==1:
+                    u_Pa = l*[kwargs["u_Pa"]]
+                    
+                else:
+                    raise ValueError("u_Pa signal cannot be varied in Default"\
+                                     "mode. Choose profile as linear or step to modify value")
+                
+            except KeyError:
+                u_Pa = l*[5]
+                
+            try:
+                if len(kwargs["u_Pc"]) ==1:
+                    u_Pc = l*[kwargs["u_Pc"]]
+                    
+                else:
+                    raise ValueError("u_Pc signal cannot be varied in Default"\
+                                     "mode. Choose profile as linear or step to modify value")
+                
+            except KeyError:
+                u_Pc = l*[5]
+                
+            
+            try:
+                if len(kwargs["u_Tr"]) ==1:
+                    u_Tr = l*[kwargs["u_Tr"]]
+                    
+                else:
+                    raise ValueError("u_Tr signal cannot be varied in Default"\
+                                     "mode. Choose profile as linear or step to modify value")
+                
+            except KeyError:
+                u_Tr = l*[308]
+            
+            input_df["u_Pa"] = u_Pa
+            input_df["u_Pc"] = u_Pc
+            input_df["u_Tr"] = u_Tr
+              
+        else:
+            # more signal types in future
+            pass
+            
+        self.input_df = copy.deepcopy(input_df)
     
         
+    
     def reset_states(self):
-        self.previous_state_variables = copy.deepcopy(self.current_state_variables)
+        
         self.current_state_variables = {
                                 "mO2_net" :None,
                                 "mH2_net" :  None,
@@ -2773,7 +3191,7 @@ class StateSpaceModel:
                                 "Ql": None,
                                 "Vc" : None
                                 }
-        
+        self.current_theta = None
 
              
 #%% Data Class  
@@ -2792,7 +3210,7 @@ class PreprocessData:
         self.y_train_scaled = None
         self.y_test_scaled = None
         self.column_number = None
-        
+        self.scaled_data = None
         if isinstance(data, type(None)):
             self.simulate_model()
         else:
@@ -2881,6 +3299,152 @@ class PreprocessData:
             V_fc = sim_model.output_voltage()
             data = copy.deepcopy(sim_model.output_signal)
             
+        elif fc_model=='GenericMatlabModel_aug':
+            P_fuel = [1.5, 3]
+            P_air = [1, 3]
+            temperature = [333, 373]
+            pfuel = np.linspace(P_fuel[0], P_fuel[1], 10)
+            pair = np.linspace(P_air[0], P_air[1], 10)
+            # vair = np.linspace(Vair[0], Vair[1], 10)
+            # vfuel = np.linspace(Vfuel[0], Vfuel[1], 10)
+            T = np.linspace(temperature[0], temperature[1], 10)
+            I_fc = np.linspace(0.01,200, 120)
+            t = np.linspace(0, 500, 120)
+            input_df = pandas.DataFrame()
+            input_df["I_fc"] = I_fc
+            input_df["t"] = t
+            df = pandas.DataFrame()
+
+            nominal_parameters = {"En_nom": None,
+                                  "In": 133.3,
+                                  "Vn": 45,
+                                  "Tn": 338,
+                                  "xn": 0.99999,
+                                  "yn": 0.21,
+                                  "P_fueln": 1.5,
+                                  "P_airn" : 1.0,
+                                  "Eoc" : 65,
+                                  "V1" :63,
+                                  "N" : 65,
+                                  "nnom":0.55,
+                                  "Vairn": 297,
+                                  "w": 0.01,
+                                  "Imax": 225, 
+                                  "Vmin" : 37,
+                                  "Td" : 10,
+                                  "ufo2_peak_percent" : 0.65,
+                                  "Vu": 1.575, 
+                                  }
+            for indexi, i in enumerate(T):
+                for indexj , j in enumerate(pair):
+                    
+                    for indexz, z in enumerate(pfuel):
+                        input_state = {
+
+                                        "P_fuel": z,
+                                        "P_air": j,
+                                        "T": i,
+                                        "x": 0.999,
+                                        "y": 0.21,
+                                        
+                                        "Vair": 305,
+                                        "Vfuel": 84.5
+                                        }
+                        
+                        nedstack = GenericMatlabModel(input_df = input_df, nominal_parameters = nominal_parameters)
+                        test_df = nedstack.generate_input_signal(T = [input_state["T"]], P_fuel = [input_state["P_fuel"]], P_air = [input_state["P_air"]], 
+                                                                 Vair = [input_state["Vair"]], Vfuel = [input_state["Vfuel"]], x = [input_state["x"]], 
+                                                                 y = [input_state["y"]])
+                        
+                        nedstack.input_df = copy.deepcopy(test_df)
+
+                        nedstack.dynamic_response(transfer_function="off")
+                        nedstack_response = nedstack.response_df
+                        
+                       # if nedstack_response.iloc[1]["V_fc"]>55:
+                            #and nedstack_response.iloc[1]["V_fc"]<70 and not isinstance(nedstack_response["V_fc"], complex):
+                        V_fc_list = nedstack_response["V_fc"].tolist() 
+                       
+                        searched_value = {
+
+                                        "P_fuel": z,
+                                        "P_air": j,
+                                        "T": i,
+                                        # "x": 0.999,
+                                        # "y": 0.21,
+                                        
+                                        # "Vair": 305,
+                                        # "Vfuel": 84.5, 
+                                        "V_fc": [V_fc_list],
+                                        "I_fc": [input_df["I_fc"].tolist()]
+                                        # "UfH2" : [UfH2_list],
+                                        # "UfO2" : [UfO2_list]
+                                        }
+                        
+                        df2 = pandas.DataFrame(searched_value, index=[0])
+                        df = pandas.concat([df, df2], ignore_index=True)
+            self.data_simulated = copy.deepcopy(df)
+            
+        elif fc_model=='StateSpaceModel_aug':
+            P_fuel = [1.5, 3]
+            P_air = [1, 3]
+         
+            temperature = [333, 373]
+            pfuel = np.linspace(P_fuel[0], P_fuel[1], 10)
+            pair = np.linspace(P_air[0], P_air[1], 10)
+            # vair = np.linspace(Vair[0], Vair[1], 10)
+            # vfuel = np.linspace(Vfuel[0], Vfuel[1], 10)
+            T = np.linspace(temperature[0], temperature[1], 10)
+            I_fc = np.linspace(0.01,200, 120)
+            t = np.linspace(0, 500, 120)
+            input_df = pandas.DataFrame()
+            input_df["I_fc"] = I_fc
+            input_df["t"] = t
+            response_df = pandas.DataFrame()
+            for indexi, i in enumerate(pfuel):
+                for indexj , j in enumerate(pair):
+                    
+                    for indexz, z in enumerate(T):
+                        input_state = {
+
+                                        "P_fuel": i,
+                                        "P_air": j,
+                                        "T": z,
+                                        "x": 0.999,
+                                        "y": 0.21,
+                                        
+                                        "Vair": 305,
+                                        "Vfuel": 84.5
+                                        }
+                        
+                        nedstack = GenericMatlabModel(input_df = input_df)
+                        test_df = nedstack.generate_input_signal(T = [input_state["T"]], P_fuel = [input_state["P_fuel"]], P_air = [input_state["P_air"]], 
+                                                                 Vair = [input_state["Vair"]], Vfuel = [input_state["Vfuel"]], x = [input_state["x"]], 
+                                                                 y = [input_state["y"]])
+                        
+                        quasi_input_df = copy.deepcopy(test_df)
+                       
+                        V_fc = []
+                        for indexk, k in quasi_input_df.iterrows():
+                            #P_H2, P_O2 = nedstack.calc_pressure(nom=False,util=False)
+                            params["P_H2"] = input_state["P_fuel"]
+                            params["P_O2"] = input_state["P_air"]
+                            params["T"] = k["T"]
+                            voltage = model_1.quasi_static_model(k["I_fc"], **params)
+                            voltage= voltage
+                            V_fc.append(voltage)
+                            
+                        response_dict = {"P_fuel":input_state["P_fuel"],
+                                    "P_air":input_state["P_air"],
+                                    "T": input_state["T"],
+                                    "V_fc": [V_fc],
+                                    "I_fc": [input_df["I_fc"].tolist()]}
+                        
+                        response = pandas.DataFrame(response_dict, index=[0])
+                        response_df = pandas.concat([response_df, response], ignore_index=True)
+
+            #response_df.to_csv("state_space_vis.csv", index=True)
+            
             
     def clean_data(self):
         """
@@ -2927,6 +3491,25 @@ class PreprocessData:
         self.X_test_scaled = copy.deepcopy(X_test)
         self.y_train_scaled = copy.deepcopy(y_train)
         self.y_test_scaled = copy.deepcopy(y_test)
+        
+    def data_prep_regression(self):
+       
+        data_clean = self.clean_data()
+        data_clean.rename(columns={'V_fc': 'A', 'I_fc': 'C'}, inplace=True)
+        data_clean = data_clean.explode(list('AC'))
+        data_clean.rename(columns={'A': 'V_fc', 'C': 'I_fc'}, inplace=True)
+        self.column_number = data_clean.columns.get_loc("V_fc")
+        scaled_data = self.scale_data(data_clean)
+        X = np.hstack((scaled_data[:, :self.column_number], scaled_data[:, self.column_number+1:]))
+        y = scaled_data[:, self.column_number]
+        X_train, X_test, y_train, y_test = self.train_test_split(X, y)
+        self.scaled_data = copy.deepcopy(scaled_data)
+        self.X_train_scaled = copy.deepcopy(X_train)
+        self.X_test_scaled = copy.deepcopy(X_test)
+        self.y_train_scaled = copy.deepcopy(y_train)
+        self.y_test_scaled = copy.deepcopy(y_test)
+        
+        
     
     def scale_data(self, data):
         """
@@ -2944,7 +3527,7 @@ class PreprocessData:
 
         """
         
-        scaler = StandardScaler()
+        scaler = MinMaxScaler()
         scaler = scaler.fit(data)
         scaled_data = scaler.transform(data)
         self.scaler = copy.deepcopy(scaler)
@@ -3012,7 +3595,7 @@ class PreprocessData:
    
         return X_train, X_test, y_train, y_test
     
-    def inverse_transform(self, predictions):
+    def inverse_transform(self, predictions, scaler):
         """
         
 
@@ -3025,8 +3608,19 @@ class PreprocessData:
         if isinstance(predictions, type(None)):
             predictions = tensor_data.predicted_data
         predictions_copy = np.repeat(predictions, self.data_simulated.shape[1], axis = -1 )
-        predictions_unscaled = tensor_data.scaler.inverse_transform(predictions_copy)[:, self.column_number]
+        predictions_unscaled = self.scaler.inverse_transform(predictions_copy)[:, self.column_number]
     
+        return predictions_unscaled
+    
+    def inverse_transform_regression(self, predictions, data=None):
+        
+        if isinstance(data, type(None)):
+            predictions_copy = np.repeat(predictions, self.data_simulated.shape[1], axis = -1 )
+            predictions_unscaled = self.scaler.inverse_transform(predictions_copy)[:, self.column_number]
+            
+        else:
+            predictions_unscaled = self.scaler.inverse_transform(data)
+        
         return predictions_unscaled
     
     def initialise_tensor_data(self):
@@ -3043,7 +3637,10 @@ class PreprocessData:
         tensor_data.scaler = copy.deepcopy(self.scaler)
         tensor_data.y_train = copy.deepcopy(self.y_train_scaled)
         tensor_data.y_test = copy.deepcopy(self.y_test_scaled)
-        
+    
+    def build_data(self, X_train, predictions):
+        data= np.insert(X_train, self.column_number, predictions, axis=1)
+        return data
     
 #%% Neural network models    
 class LSTM_model:
@@ -3081,7 +3678,7 @@ class LSTM_model:
         self.model = copy.deepcopy(model)
         return model
     
-    def train_model(self):
+    def train_model(self, batch_size=16, model_name="LSTM-untuned", X_train=None, y_train=None):
         """
         
 
@@ -3094,14 +3691,14 @@ class LSTM_model:
         # stop_early = tf.keras.callbacks.EarlyStopping(monitor= 'val_loss', 
         #                                               patience=3)
         
-        self.history = model.fit(tensor_data.X_train, tensor_data.y_train, epochs=500,
-                            batch_size=16, validation_split=0.1, verbose=1,
+        self.history = model.fit(X_train, y_train, epochs=500,
+                            batch_size=batch_size, validation_split=0.2, verbose=1,
                             )
         
         #callbacks = [stop_early]
-        model.save('LSTM-untuned.h5')
+        model.save('{.h5}'.format(model_name))
         
-    def model_predict(self):
+    def model_predict(self, X_train, model_name="LSTM-untuned"):
         """
         
 
@@ -3116,9 +3713,9 @@ class LSTM_model:
 
         """
         self.train_model()
-        model = tf.keras.models.load_model('LSTM-untuned.h5')
+        model = tf.keras.models.load_model('{}.h5'.format(model_name))
         
-        predictions = model.predict(tensor_data.X_train)
+        predictions = model.predict(X_train)
         
         self.predictions = copy.deepcopy((predictions))
         
@@ -3127,7 +3724,96 @@ class LSTM_model:
         return predictions
     
     def visualize_loss(self):
+        """
+        
+
+        Returns
+        -------
+        None.
+
+        """
         plt.plot(self.history.history['loss'], label='train')
         plt.plot(self.history.history['val_loss'], label='test')
         plt.legend()
         plt.show()
+        
+class ANN_model():
+    def __init__(self, learning_rate=None, noise=False):
+        
+        self.is_scaled=None
+        self.model = None
+        self.learning_rate = learning_rate
+        self.noise = noise
+        self.history = None
+        self.predictions = None
+        
+    def build_architecture(self,input_size=4):
+        model = Sequential([
+                            Dense(32, activation='relu', input_shape=(input_size,)),
+                            Dense(64, activation='relu'),
+                            Dense(1, activation='sigmoid')  # For binary classification, change to 'softmax' for multi-class
+                            ])
+        model.compile(optimizer='adam', loss='mean_squared_error', metrics=['accuracy'])
+        self.model=copy.deepcopy(model)
+        return model
+        
+    def train_model(self, batch_size=16, model_name="LSTM-untuned", X_train=None, y_train=None):
+        """
+        
+
+        Returns
+        -------
+        None.
+
+        """
+        model = self.build_architecture()
+        # stop_early = tf.keras.callbacks.EarlyStopping(monitor= 'val_loss', 
+        #                                               patience=3)
+        
+        self.history = model.fit(X_train, y_train, epochs=10,
+                            batch_size=batch_size, validation_split=0.2, verbose=1,
+                            )
+        
+        #callbacks = [stop_early]
+        model.save('{}.h5'.format(model_name))
+        
+    def model_predict(self, X_train, model_name="LSTM-untuned"):
+        """
+        
+
+        Returns
+        -------
+        input_df : TYPE
+            DESCRIPTION.
+        output_df : TYPE
+            DESCRIPTION.
+        predictions_df : TYPE
+            DESCRIPTION.
+
+        """
+        
+        model = tf.keras.models.load_model('{}.h5'.format(model_name))
+        
+        predictions = model.predict(X_train)
+        
+        self.predictions = copy.deepcopy((predictions))
+        
+        tensor_data.predicted_data = copy.deepcopy((predictions))
+        
+        return predictions
+    
+    def visualize_loss(self):
+        """
+        
+
+        Returns
+        -------
+        None.
+
+        """
+        plt.plot(self.history.history['loss'], label='train')
+        plt.plot(self.history.history['val_loss'], label='test')
+        plt.legend()
+        plt.show()
+        
+        

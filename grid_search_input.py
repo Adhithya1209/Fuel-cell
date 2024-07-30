@@ -10,18 +10,18 @@ import fuel_cell
 import copy
 import warnings
 warnings.filterwarnings("ignore")
-
+import matplotlib.pyplot as plt
 #%% Initialise Inputs nedstack ps6
-P_fuel = [0.75, 1.75]
-P_air = [0.75, 1.5]
-Vair = [270, 330]
-Vfuel = [75, 270]
-temperature = [290, 350]
-pfuel = np.linspace(P_fuel[0], P_fuel[1], 5)
-pair = np.linspace(P_air[0], P_air[1], 5)
-vair = np.linspace(Vair[0], Vair[1], 5)
-vfuel = np.linspace(Vfuel[0], Vfuel[1], 5)
-T = np.linspace(temperature[0], temperature[1], 5)
+P_fuel = [1.5, 3]
+P_air = [1, 3]
+Vair = [250, 500]
+Vfuel = [1, 84.5]
+temperature = [333, 373]
+pfuel = np.linspace(P_fuel[0], P_fuel[1], 10)
+pair = np.linspace(P_air[0], P_air[1], 10)
+# vair = np.linspace(Vair[0], Vair[1], 10)
+# vfuel = np.linspace(Vfuel[0], Vfuel[1], 10)
+T = np.linspace(temperature[0], temperature[1], 10)
 I_fc = np.linspace(0.01,200, 120)
 t = np.linspace(0, 500, 120)
 input_df = pandas.DataFrame()
@@ -51,53 +51,59 @@ nominal_parameters = {"En_nom": None,
                       }
 
 #%% Search optimal value nedstack ps6
-for indexi, i in enumerate(pfuel):
+for indexi, i in enumerate(T):
     for indexj , j in enumerate(pair):
-        for indexx , x in enumerate(vair):
-            for indexy, y in enumerate(vfuel):
-                for indexz, z in enumerate(T):
-                    input_state = {
-    
-                                    "P_fuel": i,
-                                    "P_air": j,
-                                    "T": z,
-                                    "x": 0.999,
-                                    "y": 0.21,
-                                    
-                                    "Vair": x,
-                                    "Vfuel": y
-                                    }
-                    
-                    nedstack = fuel_cell.GenericMatlabModel(input_df = input_df, nominal_parameters = nominal_parameters)
-                    test_df = nedstack.generate_input_signal(T = [input_state["T"]], P_fuel = [input_state["P_fuel"]], P_air = [input_state["P_air"]], 
-                                                             Vair = [input_state["Vair"]], Vfuel = [input_state["Vfuel"]], x = [input_state["x"]], 
-                                                             y = [input_state["y"]])
-                    
-                    nedstack.input_df = copy.deepcopy(test_df)
-    
-                    nedstack.dynamic_response(x0 = -32.5, transfer_function="on")
-                    nedstack_fc = nedstack.fuel_cell_parameters
-                    nedstack_response = nedstack.response_df
-                    nedstack_calc = nedstack.calculated_space
-                    
-                    if nedstack_response.iloc[1]["V_fc"]>55 and nedstack_response.iloc[1]["V_fc"]<75 and not isinstance(nedstack_response["V_fc"], complex):
-                        V_fc_list = nedstack_response["V_fc"].tolist() 
-                        searched_value = {
-    
-                                        "P_fuel": i,
-                                        "P_air": j,
-                                        "T": z,
-                                        "x": 0.999,
-                                        "y": 0.21,
-                                        
-                                        "Vair": x,
-                                        "Vfuel": y, 
-                                        "V_fc": [V_fc_list]
-                                        }
-                        
-                        df2 = pandas.DataFrame(searched_value, index=[0])
-                        df = pandas.concat([df, df2], ignore_index=True)
+        
+        for indexz, z in enumerate(pfuel):
+            input_state = {
 
+                            "P_fuel": z,
+                            "P_air": j,
+                            "T": i,
+                            "x": 0.999,
+                            "y": 0.21,
+                            
+                            "Vair": 305,
+                            "Vfuel": 84.5
+                            }
+            
+            nedstack = fuel_cell.GenericMatlabModel(input_df = input_df, nominal_parameters = nominal_parameters)
+            test_df = nedstack.generate_input_signal(T = [input_state["T"]], P_fuel = [input_state["P_fuel"]], P_air = [input_state["P_air"]], 
+                                                     Vair = [input_state["Vair"]], Vfuel = [input_state["Vfuel"]], x = [input_state["x"]], 
+                                                     y = [input_state["y"]])
+            
+            nedstack.input_df = copy.deepcopy(test_df)
+
+            nedstack.dynamic_response(transfer_function="off")
+            nedstack_fc = nedstack.fuel_cell_parameters
+            nedstack_response = nedstack.response_df
+            nedstack_calc = nedstack.calculated_space
+            
+           # if nedstack_response.iloc[1]["V_fc"]>55:
+                #and nedstack_response.iloc[1]["V_fc"]<70 and not isinstance(nedstack_response["V_fc"], complex):
+            V_fc_list = nedstack_response["V_fc"].tolist() 
+            UfH2_list = nedstack_response["UfH2"].tolist()
+            UfO2_list = nedstack_response["UfO2"].tolist()
+            searched_value = {
+
+                            "P_fuel": z,
+                            "P_air": j,
+                            "T": i,
+                            # "x": 0.999,
+                            # "y": 0.21,
+                            
+                            # "Vair": 305,
+                            # "Vfuel": 84.5, 
+                            "V_fc": [V_fc_list],
+                            "I_fc": [input_df["I_fc"].tolist()]
+                            # "UfH2" : [UfH2_list],
+                            # "UfO2" : [UfO2_list]
+                            }
+            
+            df2 = pandas.DataFrame(searched_value, index=[0])
+            df = pandas.concat([df, df2], ignore_index=True)
+
+#df.to_csv("GMM_nedstack-vis.csv", index=True)
 #%% Initialise input parameters - Nedstack ps6 steady state model
 PH2 = [0.75, 2.5]
 PO2 = [0.75, 2.5]
@@ -135,3 +141,39 @@ for indexi, i in enumerate(ph2):
                 
                 df2 = pandas.DataFrame(searched_value, index=[0])
                 df = pandas.concat([df, df2], ignore_index=True)
+#%% visualize GMM
+
+# gmm_response = pd.read_csv("GMM_nedstack-vis.csv", index_col=None)
+# gmm_response.drop(gmm_response.columns[0], axis=1, inplace=True)
+# gmm_response["V_fc"] = gmm_response["V_fc"].astype(float)
+# gmm_response["I_fc"] = gmm_response["I_fc"].astype(float)
+# gmm_response["T"] = gmm_response["V_fc"].astype(float)
+gmm_response = copy.deepcopy(df)
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+for index, row in gmm_response.iterrows():
+    V_fc_list = row["V_fc"]
+    I_fc_list = row["I_fc"]
+    T_list = len(V_fc_list)*[row["P_fuel"]]
+    
+    ax.plot(I_fc_list,V_fc_list , T_list)
+    
+ax.set_xlabel('current')
+ax.set_ylabel('voltage')
+ax.set_zlabel('P_fuel')
+plt.show()
+#%% polarisation2d GMM
+gmm_response = copy.deepcopy(df)
+
+for index, row in gmm_response.head(5).iterrows():
+    V_fc_list = row["V_fc"]
+    I_fc_list = row["I_fc"]
+    T= row["P_fuel"]
+
+    plt.plot(I_fc_list,V_fc_list , label='{}bar'.format(T))
+    
+plt.xlabel('current')
+plt.ylabel('voltage')
+plt.title('Polarisation curve')
+plt.legend()
+plt.show()

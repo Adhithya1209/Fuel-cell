@@ -12,6 +12,9 @@ import pandas
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # Import for 3D plotting
+import numpy as np
 
 # Step 1: Load data from a CSV file using pandas
 # Replace 'your_data.csv' with the path to your CSV file
@@ -91,9 +94,9 @@ current = []
 c1= 100*[12.5]
 c2 = np.linspace(12.5, 20.5, 100)
 c3 = 100*[20.5]
-c4 = np.linspace(20.5, 24.5, 100)
-c5 = 100*[24.5]
-c6 = np.linspace(24.5, 20.5, 100)
+c4 = 100*[20.5]
+c5 = 100*[20.5]
+c6 = 100*[20.5]
 c7 = 100*[20.5]
 c8 = np.linspace(20.5, 13, 100)
 c9 = 100*[13]
@@ -115,4 +118,70 @@ plt.xlabel('time')
 plt.ylabel('current')
 plt.title('Transient input')
 plt.legend()
+plt.show()
+
+#%% GMM visualize input space - run grid search before this
+df["V_fc_ab"] = None
+df["V_avg"] = None
+df["I_fc"] = None
+for index, row in df.iterrows():
+    V_fc = df["V_fc"]
+    V_fc_list = V_fc.values[index]
+    V_fc_ab = [abs(complex_num) for complex_num in V_fc_list]
+    df.at[index, "V_fc_ab"] = V_fc_ab
+    V_avg = sum(V_fc_ab)/120
+    df.at[index, "V_avg"] = V_avg
+    I_fc = np.linspace(0.01,200, 120)
+    df.at[index, "I_fc"] = I_fc
+    
+df = df.dropna(subset=["V_avg"])
+df.reset_index(inplace = True, drop = True)
+#%%  4d plot GMM
+
+# Sample data for 4D plot (x, y, z, color)
+
+colors = df["T"]  # The fourth dimension represented by colors
+
+# Create a figure and a 3D axis
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+# Create a scatter plot with color mapping
+sc = ax.scatter(df["P_fuel"], df["P_air"],df["V_avg"], c=colors, cmap='viridis')
+
+# Add a color bar which maps values to colors
+cbar = fig.colorbar(sc, orientation='vertical')
+cbar.set_label('Temperature (K)')
+
+# Set labels for the axes
+ax.set_xlabel('P_H2 (atm)')
+ax.set_ylabel('P_O2 (atm)')
+ax.set_zlabel('V_fc_nominal (V)')
+
+plt.title('4D Scatter Plot')
+plt.show()
+#%% GMM data augmentation plot
+
+df = df.explode("V_fc_ab")
+
+df = df.dropna(subset=["V_fc_ab"])
+colors = df["T"]  # The fourth dimension represented by colors
+
+# Create a figure and a 3D axis
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+# Create a scatter plot with color mapping
+sc = ax.scatter(df["P_fuel"], df["P_air"],df["I_fc"], c=colors, cmap='viridis')
+
+# Add a color bar which maps values to colors
+cbar = fig.colorbar(sc, orientation='vertical')
+cbar.set_label('Temperature (K)')
+
+# Set labels for the axes
+ax.set_xlabel('P_H2 (atm)')
+ax.set_ylabel('I(A)')
+ax.set_zlabel('V_fc_nominal (V)')
+
+plt.title('4D exploded voltage values w.r.t current')
 plt.show()

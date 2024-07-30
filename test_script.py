@@ -259,3 +259,8 @@ nedstack = fuel_cell.SteadyStateEmprical()
 nedstack.generate_input_signal(I=[5,200], T=[343], PH2=[1], PO2=[1])
 
 response_df = nedstack.run_steady_state()
+
+#%% State space Model - Avista Labs SR-12
+
+avista = fuel_cell.StateSpaceModel()
+state_space = avista.ode_solver()
